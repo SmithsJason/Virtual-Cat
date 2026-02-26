@@ -1,3 +1,14 @@
+/**
+ * CatStatusPanel.tsx —— 猫状态展示面板组件。
+ *
+ * 功能模块：
+ *   1. 猫名字 + 头像图片（根据花色映射，未命名显示剪影）
+ *   2. 语音气泡（猫"说话"时显示，10s 自动消失）
+ *   3. Flash 消息（操作后的浮动提示条，10s 自动消失）
+ *   4. 三项状态条（Energy / Happiness / Cleanliness），颜色随数值变化
+ *   5. Quick Actions 快捷按钮（Give snack / Play with toy / Freshen up）
+ */
+
 import clsx from "clsx";
 import { useCallback, useMemo } from "react";
 
@@ -10,6 +21,7 @@ import unknownCatImage from "../assets/whos-that-cat.png";
 import type { CatColorPattern, CatStatePayload } from "../lib/cat";
 import { useAppStore } from "../store/useAppStore";
 
+/** 三项状态条的配置 */
 const STATUS_CONFIG = [
   { key: "energy", label: "Energy"},
   { key: "happiness", label: "Happiness"},
@@ -25,9 +37,11 @@ type QuickAction = {
   id: string;
   label: string;
   description: string;
+  /** 根据猫的当前状态生成预设 prompt */
   prompt: (cat: CatStatePayload) => string;
 };
 
+/** 花色 → 图片资源映射表 */
 const CAT_IMAGE_BY_PATTERN: Record<CatColorPattern, string> = {
   black: blackCatImage,
   calico: calicoCatImage,
@@ -36,6 +50,7 @@ const CAT_IMAGE_BY_PATTERN: Record<CatColorPattern, string> = {
   white: whiteCatImage,
 };
 
+/** Quick Action 快捷操作定义，每个按钮生成不同的对话 prompt */
 const QUICK_ACTIONS: QuickAction[] = [
   {
     id: "treat",
@@ -58,18 +73,21 @@ const QUICK_ACTIONS: QuickAction[] = [
 ];
 
 export function CatStatusPanel({ onQuickAction, className }: CatStatusPanelProps) {
+  // 从 Zustand 细粒度订阅：只取需要的字段，避免无关状态变更触发重渲染
   const speech = useAppStore((state) => state.speech);
   const flashMessage = useAppStore((state) => state.flashMessage);
   const cat = useAppStore((state) => state.cat);
 
+  /** 处理 Quick Action 点击：生成预设 prompt 并通过回调发送到 ChatKit */
   const handleQuickAction = useCallback(
     (action: QuickAction) => onQuickAction(action.prompt(cat)),
     [cat]
   );
 
+  /** useMemo 缓存猫图片计算：仅在 colorPattern 变化时重新计算 */
   const catImage = useMemo(() => {
     if (!cat.colorPattern) {
-      return unknownCatImage;
+      return unknownCatImage;  // 未命名 → 显示剪影
     }
     return CAT_IMAGE_BY_PATTERN[cat.colorPattern] ?? unknownCatImage;
   }, [cat.colorPattern]);
@@ -81,30 +99,35 @@ export function CatStatusPanel({ onQuickAction, className }: CatStatusPanelProps
         className,
       )}
     >
+      {/* ========== 猫名字 ========== */}
       <div className="space-y-2">
         <h2 className="text-3xl font-semibold text-slate-900 dark:text-white">
           {cat.name}
         </h2>
       </div>
 
+      {/* ========== 猫头像 + 语音气泡 / Flash 消息 ========== */}
       <div className="relative w-full flex items-center justify-center">
         <img
           src={catImage}
           alt="Illustrated cat"
           className="h-48 w-48 object-contain drop-shadow-xl"
         />
+        {/* 语音气泡：猫"说话"时显示，带 CSS 三角箭头和淡入动画 */}
         {speech ? (
           <div
             key={speech.id}
             className="absolute flex animate-fade-in items-center justify-center -bottom-10 w-40 rounded-2xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-lg dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
           >
             {speech.message}
+            {/* CSS 三角箭头指向猫图片 */}
             <span
               aria-hidden
               className="pointer-events-none absolute -top-2 left-10 block h-4 w-4 rotate-45 border-l border-t border-slate-200 bg-white shadow-[-4px_-4px_10px_-3px_rgba(15,23,42,0.4)] dark:border-slate-700 dark:bg-slate-800"
             />
           </div>
         ) : null}
+        {/* Flash 消息：操作后的浮动提示（如 "Fed Miso tuna treats"） */}
         {flashMessage ? (
           <div className="absolute flex items-center justify-center -bottom-1">
             <div
@@ -122,7 +145,9 @@ export function CatStatusPanel({ onQuickAction, className }: CatStatusPanelProps
         ) : null}
       </div>
 
+      {/* ========== 状态条 + Quick Actions ========== */}
       <div className="w-full space-y-5">
+        {/* 三项状态条 */}
         <div className="space-y-3">
           {STATUS_CONFIG.map((status) => (
             <StatusMeter
@@ -133,6 +158,7 @@ export function CatStatusPanel({ onQuickAction, className }: CatStatusPanelProps
           ))}
         </div>
 
+        {/* Quick Actions 快捷按钮区域 */}
         <div className="mt-auto w-full border-t border-slate-200/80 pt-4 text-left dark:border-slate-800/60">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
             Quick actions
@@ -163,11 +189,17 @@ export function CatStatusPanel({ onQuickAction, className }: CatStatusPanelProps
   );
 }
 
+// ==================== 子组件：状态条 ====================
+
 type StatusMeterProps = {
   label: string;
   value: number;
 };
 
+/**
+ * StatusMeter —— 单项状态条组件。
+ * 根据数值（0-10）显示不同颜色：>= 7 绿色, >= 5 黄色, >= 3 橙色, < 3 红色。
+ */
 function StatusMeter({ label, value }: StatusMeterProps) {
   const normalized = Math.max(0, Math.min(10, Number(value) || 0));
   const percentage = (normalized / 10) * 100;
@@ -191,6 +223,7 @@ function StatusMeter({ label, value }: StatusMeterProps) {
   );
 }
 
+/** 根据数值返回对应的 Tailwind 颜色类名 */
 function getColor(value: number) {
   if (value >= 7) return "bg-green-500";
   if (value >= 5) return "bg-yellow-400";

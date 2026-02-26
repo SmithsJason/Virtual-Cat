@@ -1,3 +1,27 @@
+"""
+猫管家 AI Agent 定义 —— 项目的核心 AI 逻辑层。
+
+职责：
+  1. 定义 Agent 的人设指令（System Prompt）—— Cozy Cat Companion 角色
+  2. 实现 8 个工具函数（function_tool），涵盖数据查询、状态修改、Widget 输出、客户端特效
+  3. 通过 CatAgentContext 在工具调用中访问线程信息、存储实例和猫状态
+  4. 使用 StopAtTools 策略控制 Widget 输出型工具调用后立即停止生成
+
+工具函数分类：
+  ┌──────────────────┬───────────┬─────────────────────────────────────┐
+  │ 工具名            │ 类型       │ 功能说明                              │
+  ├──────────────────┼───────────┼─────────────────────────────────────┤
+  │ get_cat_status   │ 数据查询   │ 获取猫当前状态，供 Agent 推理使用        │
+  │ feed_cat         │ 状态修改   │ 喂食：energy+3, happiness+1           │
+  │ play_with_cat    │ 状态修改   │ 玩耍：happiness+2, energy-1           │
+  │ clean_cat        │ 状态修改   │ 清洁：cleanliness+3                   │
+  │ set_cat_name     │ 状态+线程  │ 永久命名并揭晓花色                      │
+  │ suggest_cat_names│ Widget输出 │ 渲染交互式名字候选列表                   │
+  │ show_cat_profile │ Widget输出 │ 渲染猫档案卡                           │
+  │ speak_as_cat     │ 客户端特效  │ 让猫在前端面板"说话"                    │
+  └──────────────────┴───────────┴─────────────────────────────────────┘
+"""
+
 from __future__ import annotations
 
 import logging
@@ -71,15 +95,26 @@ INSTRUCTIONS: str = """
       ask them whether they'd like to see it.
 """
 
+"""Agent 使用的 LLM 模型。"""
 MODEL = "gpt-5-mini"
 
 
 class CatAgentContext(AgentContext):
+    """
+    Agent 运行上下文 —— 工具函数通过 ctx.context 访问此对象。
+
+    继承 AgentContext（包含 thread、store、request_context），
+    额外添加 cats（CatStore）字段，使工具函数能够读写猫状态。
+    Field(exclude=True) 防止序列化时包含存储实例。
+    """
     model_config = ConfigDict(arbitrary_types_allowed=True)
     cats: Annotated[CatStore, Field(exclude=True)]
 
 
+# ==================== 内部辅助函数 ====================
+
 async def _get_state(ctx: RunContextWrapper[CatAgentContext]) -> CatState:
+    """从 CatStore 中加载当前线程的猫状态（返回克隆体）。"""
     thread_id = ctx.context.thread.id
     return await ctx.context.cats.load(thread_id)
 
@@ -88,6 +123,7 @@ async def _update_state(
     ctx: RunContextWrapper[CatAgentContext],
     mutator: Callable[[CatState], None],
 ) -> CatState:
+    """在 CatStore 中原子地修改当前线程的猫状态，返回更新后的克隆体。"""
     thread_id = ctx.context.thread.id
     return await ctx.context.cats.mutate(thread_id, mutator)
 
@@ -97,6 +133,10 @@ async def _sync_status(
     state: CatState,
     flash: str | None = None,
 ) -> None:
+    """
+    通过 ClientEffectEvent 将猫的最新状态推送到前端。
+    前端监听 'update_cat_status' 事件，更新状态面板和触发 flash 消息。
+    """
     await ctx.context.stream(
         ClientEffectEvent(
             name="update_cat_status",
@@ -109,7 +149,11 @@ async def _sync_status(
 
 
 async def _add_hidden_context(ctx: RunContextWrapper[CatAgentContext], content: str) -> None:
-    # 添加一个隐藏上下文条目，让之后的 agent 输入知道已经执行过某个动作。
+    """
+    向线程中注入一个 HiddenContextItem（隐藏上下文条目）。
+    这些标签（如 <FED_CAT>、<PLAYED_WITH_CAT>）不会在前端显示，
+    但会被后续的 Agent 推理读取，使其「记住」之前执行过的操作。
+    """
     thread = ctx.context.thread
     request_context = ctx.context.request_context
     await ctx.context.store.add_thread_item(
@@ -124,6 +168,8 @@ async def _add_hidden_context(ctx: RunContextWrapper[CatAgentContext], content: 
     )
 
 
+# ==================== 工具函数定义 ====================
+
 @function_tool(
     description_override=(
         "Read the cat's current stats before deciding what to do next. No parameters."
@@ -132,9 +178,12 @@ async def _add_hidden_context(ctx: RunContextWrapper[CatAgentContext], content: 
 async def get_cat_status(
     ctx: RunContextWrapper[CatAgentContext],
 ) -> dict[str, Any]:
+    """
+    【数据查询工具】获取猫的当前状态。
+    Agent 在做决策前调用此工具获取最新数据，返回的 payload 会作为 Agent 的推理依据。
+    """
     logger.info("[TOOL CALL] get_cat_status")
     state = await _get_state(ctx)
-    # 必须返回 payload，这样助手才能基于这些数据生成自然语言回复。
     return state.to_payload(ctx.context.thread.id)
 
 
@@ -148,12 +197,16 @@ async def feed_cat(
     ctx: RunContextWrapper[CatAgentContext],
     meal: str | None = None,
 ):
+    """
+    【状态修改工具】喂食猫咪。
+    修改状态后通过 _sync_status() 向前端推送 ClientEffect 事件，
+    并注入 <FED_CAT> 隐藏上下文标签。
+    """
     logger.info("[TOOL CALL] feed_cat")
     state = await _update_state(ctx, lambda s: s.feed())
     flash = f"Fed {state.name} {meal}" if meal else f"{state.name} enjoyed a snack"
     await _add_hidden_context(ctx, f"<FED_CAT>{flash}</FED_CAT>")
     await _sync_status(ctx, state, flash)
-    # 这是一个只触发客户端特效的工具调用，不需要返回 payload；agent 配置中应在调用该工具后停止继续生成。
 
 
 @function_tool(
@@ -166,12 +219,15 @@ async def play_with_cat(
     ctx: RunContextWrapper[CatAgentContext],
     activity: str | None = None,
 ):
+    """
+    【状态修改工具】与猫玩耍。
+    修改状态后推送 ClientEffect 并注入 <PLAYED_WITH_CAT> 隐藏上下文标签。
+    """
     logger.info("[TOOL CALL] play_with_cat")
     state = await _update_state(ctx, lambda s: s.play())
     flash = activity or "Playtime"
     await _add_hidden_context(ctx, f"<PLAYED_WITH_CAT>{flash}</PLAYED_WITH_CAT>")
     await _sync_status(ctx, state, f"{state.name} played: {flash}")
-    # 这是一个只触发客户端特效的工具调用，不需要返回 payload；agent 配置中应在调用该工具后停止继续生成。
 
 
 @function_tool(
@@ -184,12 +240,15 @@ async def clean_cat(
     ctx: RunContextWrapper[CatAgentContext],
     method: str | None = None,
 ):
+    """
+    【状态修改工具】清洁猫咪。
+    修改状态后推送 ClientEffect 并注入 <CLEANED_CAT> 隐藏上下文标签。
+    """
     logger.info("[TOOL CALL] clean_cat")
     state = await _update_state(ctx, lambda s: s.clean())
     flash = method or "Bath time"
     await _add_hidden_context(ctx, f"<CLEANED_CAT>{flash}</CLEANED_CAT>")
     await _sync_status(ctx, state, f"{state.name} is fresh: {flash}")
-    # 这是一个只触发客户端特效的工具调用，不需要返回 payload；agent 配置中应在调用该工具后停止继续生成。
 
 
 @function_tool(
@@ -202,10 +261,21 @@ async def set_cat_name(
     ctx: RunContextWrapper[CatAgentContext],
     name: str,
 ):
+    """
+    【状态+线程修改工具】为猫命名（一次性操作）。
+
+    流程：
+      1. 检查是否已命名（防止重命名）
+      2. 调用 CatState.rename() —— 设置名字 + 随机分配花色（渐进式揭晓）
+      3. 更新线程标题为 "{name}'s Lounge"
+      4. 注入 <CAT_NAME_SELECTED> 隐藏上下文
+      5. 通过 _sync_status() 推送状态到前端（触发 confetti 动画）
+    """
     logger.info('[TOOL CALL] set_cat_name("%s")', name)
 
     try:
         state = await _get_state(ctx)
+        # 防止重命名：如果猫已有名字，直接返回提示
         if state.name != "Unnamed Cat":
             await ctx.context.stream(
                 ThreadItemDoneEvent(
@@ -219,22 +289,24 @@ async def set_cat_name(
             )
             return
 
+        # 格式化名字并执行命名（触发花色随机分配）
         cleaned = name.strip().title()
         if not cleaned:
             raise ValueError("A name is required to rename the cat.")
 
         state = await _update_state(ctx, lambda s: s.rename(cleaned))
 
-        ctx.context.thread.title = f"{state.name}’s Lounge"
+        # 更新线程标题并持久化
+        ctx.context.thread.title = f"{state.name}'s Lounge"
         await ctx.context.store.save_thread(ctx.context.thread, ctx.context.request_context)
 
+        # 注入隐藏上下文标签
         await _add_hidden_context(ctx, f"<CAT_NAME_SELECTED>{state.name}</CAT_NAME_SELECTED>")
+        # 推送状态到前端（前端检测到命名变化后触发 confetti 纸屑动画）
         await _sync_status(ctx, state, f"Now called {state.name}")
     except Exception as exc:
         logger.error("Error setting cat name: %s", exc)
         raise
-
-    # 这是一个只触发客户端特效的工具调用，不需要返回 payload；agent 配置中应在调用该工具后停止继续生成。
 
 
 @function_tool(
@@ -249,6 +321,11 @@ async def show_cat_profile(
     age: int | None = None,
     favorite_toy: str | None = None,
 ):
+    """
+    【Widget 输出工具】渲染猫档案卡 Widget。
+    使用 StopAtTools 策略，输出 Widget 后 Agent 不再继续生成文本。
+    根据猫是否已命名，追加不同的引导消息。
+    """
     def mutate(state: CatState) -> None:
         state.set_age(age)
 
@@ -256,6 +333,7 @@ async def show_cat_profile(
     widget = build_profile_card_widget(state, favorite_toy)
     await ctx.context.stream_widget(widget, copy_text=profile_widget_copy_text(state))
 
+    # 根据命名状态追加不同的引导消息
     if state.name == "Unnamed Cat":
         await ctx.context.stream(
             ThreadItemDoneEvent(
@@ -269,7 +347,6 @@ async def show_cat_profile(
                 ),
             )
         )
-
     else:
         await ctx.context.stream(
             ThreadItemDoneEvent(
@@ -297,6 +374,10 @@ async def speak_as_cat(
     ctx: RunContextWrapper[CatAgentContext],
     line: str,
 ):
+    """
+    【客户端特效工具】让猫在前端面板中"说话"。
+    通过 ClientEffectEvent('cat_say') 推送语音气泡消息到前端。
+    """
     logger.info("[TOOL CALL] speak_as_cat(%s)", line)
     message = line.strip()
     if not message:
@@ -323,8 +404,14 @@ async def suggest_cat_names(
     ctx: RunContextWrapper[CatAgentContext],
     suggestions: list[CatNameSuggestion],
 ):
+    """
+    【Widget 输出工具】渲染交互式名字候选列表 Widget。
+    使用 StopAtTools 策略，输出 Widget 后 Agent 不再继续生成文本。
+    Widget 中每个选项绑定 cats.select_name 客户端动作。
+    """
     logger.info("[TOOL CALL] suggest_cat_names")
     try:
+        # 校验并规范化候选列表
         normalized: list[CatNameSuggestion] = []
         for entry in suggestions:
             try:
@@ -338,6 +425,7 @@ async def suggest_cat_names(
         if not normalized:
             raise ValueError("Provide at least one valid name suggestion before calling the tool.")
 
+        # 先输出一条引导文本消息
         await ctx.context.stream(
             ThreadItemDoneEvent(
                 item=AssistantMessageItem(
@@ -351,6 +439,7 @@ async def suggest_cat_names(
             )
         )
 
+        # 构建并输出名字候选列表 Widget
         widget = build_name_suggestions_widget(normalized)
         await ctx.context.stream_widget(
             widget, copy_text=", ".join(suggestion.name for suggestion in normalized)
@@ -360,29 +449,31 @@ async def suggest_cat_names(
         raise
 
 
+
+# ==================== Agent 实例定义 ====================
+
 cat_agent = Agent[CatAgentContext](
     model=MODEL,
     name="Cozy Cat Companion",
     instructions=INSTRUCTIONS,
     tools=[
-        # 获取 agent 做推理时需要用到的猫状态数据
+        # 【数据查询】获取猫状态，供 Agent 推理时使用
         get_cat_status,
-        # 生成一个简单的 widget 输出（猫档案卡）
+        # 【Widget 输出】渲染猫档案卡（静态展示型 Widget）
         show_cat_profile,
-        # 触发客户端特效，让猫在面板中“说话”
+        # 【客户端特效】让猫在前端面板中"说话"（语音气泡）
         speak_as_cat,
-        # 修改猫状态，然后通过客户端特效同步前端状态
+        # 【状态修改】喂食 / 玩耍 / 清洁 —— 修改状态后通过 ClientEffect 同步前端
         feed_cat,
         play_with_cat,
         clean_cat,
-        # 同时修改猫状态和线程状态，然后通过客户端特效
-        # 将最新状态同步到前端
+        # 【状态+线程修改】命名猫咪 —— 同时修改猫状态和线程标题，触发花色揭晓
         set_cat_name,
-        # 输出带有部分 agent 生成内容的交互式 widget（名字候选列表）
+        # 【Widget 输出】交互式名字候选列表 —— 用户可点击选择，触发 server action
         suggest_cat_names,
-        # 注意：为兼容 ChatCompletions API，此处已移除了图片生成工具
     ],
-    # 在调用会输出 widget 的工具之后停止继续生成，避免重复说明
+    # StopAtTools 策略：调用会输出 Widget 的工具后，Agent 立即停止生成文本，
+    # 避免在 Widget 渲染后又输出冗余的说明文字
     tool_use_behavior=StopAtTools(
         stop_at_tool_names=[
             suggest_cat_names.name,
