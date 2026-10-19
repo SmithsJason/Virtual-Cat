@@ -1,0 +1,46 @@
+services:
+  db:
+    image: pgvector/pgvector:0.8.1-pg17
+    environment:
+      POSTGRES_USER: miaoban
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-miaoban}
+      POSTGRES_DB: miaoban
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U miaoban -d miaoban"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  migrate:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://miaoban:${POSTGRES_PASSWORD:-miaoban}@db:5432/miaoban
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db: {condition: service_healthy}
+  api:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://miaoban:${POSTGRES_PASSWORD:-miaoban}@db:5432/miaoban
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+  worker:
+    build: ./backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://miaoban:${POSTGRES_PASSWORD:-miaoban}@db:5432/miaoban
+    command: ["python", "-m", "app.worker"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+  web:
+    build: ./frontend
+    ports: ["127.0.0.1:5170:80"]
+    depends_on: [api]
+volumes:
+  postgres-data:

@@ -1,114 +1,174 @@
-## 项目简介
+# 喵伴 Miaoban
 
-**virtual-cat** 一个基于虚拟猫互动应用。  
-用户可以在浏览器中与“猫管家”对话，通过自然语言来喂猫、陪玩、清洁、给猫取名字，并实时看到猫的状态变化和形象揭晓。
+一个支持持续养成、跨会话个人记忆和受预算约束对话的虚拟猫陪伴系统。
 
-### 核心特性
+论文暂定题目：**基于大语言模型与长期记忆机制的虚拟宠物陪伴系统设计与实现**。
 
-- **对话驱动交互**：通过 ChatKit 聊天框和 Agent 工具调用来控制猫的状态（能量、快乐、清洁度等）。
-- **每个会话一只猫**：不同 Chat 线程对应不同猫的独立状态。
-- **可视化状态面板**：展示猫的名字、形象、状态条，以及“猫说话”气泡和闪烁提示。
-- **Widget 组件**：例如“名字候选列表”“猫档案卡片”等，通过 ChatKit widgets 与前端 UI 联动。
+- [设计架构与技术选型](docs/architecture.md)
+- [评估方法与样例数据](evals/README.md)
+- [验证记录](docs/verification.md)
 
----
+## 当前功能
 
-## 技术栈概览
+- 注册、登录、退出；账号数据隔离，服务端 Cookie 会话。
+- 每个用户一只持续存在的猫，聊天会话与宠物身份解耦。
+- 饱腹、精力、心情、清洁、亲密度；时间衰减、离线结算和成长阶段。
+- 喂食、玩耍、梳洗、休息；按钮与 Agent 工具共用事务及幂等规则。
+- 中文宠物空间、基础二维动作、成长日记、会话切换与历史消息分页。
+- 手动个人记忆、对话记忆提取、来源查看、纠正和遗忘。
+- 结构化字段、中文关键词、pgvector 向量与 RRF 融合召回。
+- 近期消息、阶段摘要与相关记忆分层组装；每次模型调用前检查 token 预算。
+- PostgreSQL 持久化任务、租约重试、对话运行状态与断线后查询。
 
-- **前端**
-  - React + TypeScript
-  - Vite 开发/构建
-  - Tailwind CSS 负责样式与暗色/亮色主题
-  - Zustand 维护全局应用状态（线程 ID、猫状态、主题、提示气泡等）
-  - `@openai/chatkit-react` 负责对话 UI 与 ChatKit 协议
+对话、模型提取和摘要需要真实模型配置。**未配置密钥时，登录、领养、照料、日记、手动记忆和关键词检索可用，界面明确提示聊天尚未连接。** 对明确“叫我某某”的消息，后台具备受限的规则提取作为基础路径，不将其宣称为完整模型提取。
 
-- **后端**
-  - FastAPI 提供 HTTP 接口（`/chatkit`、`/cats/{thread_id}`）
-  - ChatKit Server 实现（`CatAssistantServer`）对接 Agent 与线程存储
-  - 自定义 Agent（`cat_agent`），使用工具函数管理猫状态和 widgets
-  - OpenAI/代理 API 客户端（通过 `OPENAI_API_KEY` 和可选的 `OPENAI_BASE_URL` 配置）
-
----
-
-## 目录结构
+## 技术结构
 
 ```text
 backend/
-  app/
-    main.py              # FastAPI 入口 & HTTP 路由
-    server.py            # ChatKit Server 实现 (CatAssistantServer)
-    cat_agent.py         # Agent 定义与工具函数（喂食/玩耍/清洁/命名等）
-    cat_state.py         # 猫状态数据模型（能量、快乐、清洁度、花色等）
-    cat_store.py         # 基于线程 ID 的猫状态内存存储
-    config.py            # OpenAI 客户端与代理配置
-    widgets/             # ChatKit widgets 模板与构建工具
-
+  app/api/              登录、宠物、记忆、消息与 SSE 接口
+  app/services/pets.py   可测试的养成规则与事务
+  app/services/memory.py 提取写入、来源抑制、中文与向量召回
+  app/services/context.py 分层上下文与 token 计算
+  app/services/agent.py  Agents SDK、逐调用预算、共享工具
+  app/worker.py         持久化任务消费与租约续期
+  app/models.py         关系数据和 pgvector 模型
+  alembic/              初始 schema 快照及迁移
+  tests/                领域、真实 PostgreSQL、模拟模型协议测试
 frontend/
-  src/
-    main.tsx             # React 入口
-    App.tsx              # 页面布局：聊天面板 + 猫状态面板
-    components/
-      ChatKitPanel.tsx   # 集成 ChatKit，对接后端 /chatkit
-      CatStatusPanel.tsx # 展示猫状态、图片、quick actions
-      ThemeToggle.tsx    # 亮/暗色主题切换
-    lib/
-      config.ts          # 前端环境变量与 ChatKit/猫状态接口地址
-      cat.ts             # 猫状态类型定义与默认值
-    store/
-      useAppStore.ts     # Zustand 全局状态（主题、线程、猫状态等）
-    assets/              # 猫图片资源（不同花色 + 未揭晓状态）
+  src/components/       登录、领养、场景、聊天、记忆、日记
+  src/lib/              API、SSE、类型及现有猫素材
+  e2e/                  桌面与手机浏览器流程
+  nginx.conf            同源 API 与 SSE 代理
+compose.yaml            PostgreSQL、迁移、API、Worker、Web
 ```
 
----
+旧版 ChatKit 协议层、内存存储和示例启动入口已被替换，旧实现可从 Git 历史查看。原来进程内已丢失的猫和对话无法恢复。
 
-## 本地运行说明
+## 推荐启动方式
 
-### 1. 启动后端
-
-在 `backend` 目录下：
+需要 Docker Compose。无需为了体验基础养成先配置模型。
 
 ```bash
-uv sync
-export OPENAI_API_KEY="sk-..."        # 必填：OpenAI 或代理密钥
-# 可选：如果使用代理 / 中转服务，则设置：
-# export OPENAI_BASE_URL="https://your-proxy-url"
+cp .env.example .env
+# 按需要编辑 .env 中的模型配置
+# 对外部署前修改 POSTGRES_PASSWORD，设置正确 APP_ORIGIN 和 COOKIE_SECURE
 
-uv run uvicorn app.main:app --reload --port 8000
+docker compose up --build -d
 ```
 
-启动后：
-- ChatKit 接口：`http://127.0.0.1:8000/chatkit`
-- 猫状态接口：`http://127.0.0.1:8000/cats/{thread_id}`
-
-### 2. 启动前端
-
-在 `frontend` 目录下：
+打开 [http://localhost:5170](http://localhost:5170)。`migrate` 在数据库就绪后运行，API 和 Worker 等待迁移完成。数据库持久化在 `postgres-data` 卷中。
 
 ```bash
-npm install
+docker compose logs -f api worker
+docker compose down
+```
 
-export VITE_CHATKIT_API_URL="http://127.0.0.1:8000/chatkit"
-export VITE_CAT_STATE_API_URL="http://127.0.0.1:8000/cats"
-export VITE_CHATKIT_API_DOMAIN_KEY="domain_pk_local_dev"  # 本地任意非空字符串即可
+`down` 保留数据卷；不要为日常重启使用 `down -v`。
 
+## 本地开发
+
+需要 **Node.js 22.12+、Python 3.12+、PostgreSQL 17 与 pgvector**。
+
+```bash
+python3.12 -m venv .venv
+.venv/bin/pip install -r backend/requirements.lock
+.venv/bin/pip install --no-deps -e ./backend
+npm ci
+npm --prefix frontend ci
+cp .env.example .env
+```
+
+数据库可以单独由 Compose 启动：
+
+```bash
+docker compose up -d db
+.venv/bin/alembic -c backend/alembic.ini upgrade head
 npm run dev
 ```
 
-默认 Vite 开发服务器运行在 `http://127.0.0.1:5170`。
+`npm run dev` 会在后台启动 API、Worker 和前端，等待数据库查询、迁移和前端代理全部就绪后才返回成功。启动不依赖编辑器或临时执行会话；结束启动命令所在终端不会停止服务。重复执行不会启动多份进程。前端支持热更新，修改后端后可停止再启动。如果使用已有数据库，先修改 `DATABASE_URL`。API 文档在 `http://127.0.0.1:8000/docs`。
 
----
+```bash
+npm run dev:start    # 与 npm run dev 相同
+npm run dev:status   # 检查受管理的进程和 /api/health
+npm run dev:stop     # 仅停止该启动器创建的服务，保留数据库文件
+```
 
-## 使用体验简介
+日志保存到 `.local/dev.log`。启动器优先使用当前的 Node.js 22.12+，也支持已安装的 nvm 版本、桌面提供的运行时或 `MIAOBAN_NODE` 指定的可执行文件。它不会安装运行时、重置数据库或停止其他程序占用的端口。
 
-- 打开页面后，可以看到：
-  - 左/右两个卡片：一侧是 ChatKit 聊天框，一侧是猫状态面板。
-  - 顶部可以切换暗色/亮色主题。
-- 通过输入自然语言（例如“帮我喂猫”“跟猫玩一会”）或点击 Quick actions 按钮，即可触发 Agent 工具：
-  - 状态条会实时变化，猫会弹出“说话”气泡。
-  - 当你给猫取了名字后，会有小小的烟花动画，猫的花色图片也会被“揭晓”。
+首次使用 tiktoken 会下载对应 tokenizer 词表。离线部署应预先缓存；后端 Docker 镜像在构建时预热默认 `o200k_base`。
 
-如果你计划二次开发，可以从以下文件入手：
-- 前端交互：`App.tsx`、`ChatKitPanel.tsx`、`CatStatusPanel.tsx`
-- Agent 逻辑与工具：`backend/app/cat_agent.py`
-- 猫状态模型与存储：`backend/app/cat_state.py`、`backend/app/cat_store.py`
+本次开发环境没有 Docker，使用忽略目录 `.local/` 下已有的 PostgreSQL 17 和 pgvector 进行真实数据库验证，端口为 `55432`；本机 `.env` 使用该端口，未提交。当配置指向本地 `55432` 且已有验证工具时，启动器会通过 `scripts/local-postgres.mjs` 启动该实例；其恢复完成后才执行迁移。仓库不会携带或自动下载数据库二进制。正式复现优先使用 Compose 或已安装的 PostgreSQL。
 
+## 模型配置
 
+```dotenv
+OPENAI_API_KEY=填写对话密钥
+OPENAI_BASE_URL=
+CHAT_MODEL=gpt-5-mini
+CHAT_TOKEN_PARAMETER=max_completion_tokens
+EMBEDDING_API_KEY=填写向量密钥
+EMBEDDING_BASE_URL=
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSIONS=1536
+```
+
+两个密钥可使用同一个账号，但必须显式配置。空端点使用官方服务地址；代理必须支持对应的 Chat Completions、流式工具调用或 Embeddings 能力。旧协议代理若只支持 `max_tokens`，显式修改 `CHAT_TOKEN_PARAMETER=max_tokens`。
+
+`OUTPUT_TOKENS` 与 `REASONING_RESERVE` 合并为模型的 completion 上限，并从窗口容量中共同预留；输入另由 `CONTEXT_TOKENS` 约束。tiktoken 统计加保守余量仍是模型相关的估算，不能替代所用服务的真实窗口与返回用量。未知模型使用默认编码，切换代理后需要联调校准。
+
+修改 `EMBEDDING_DIMENSIONS` 必须同步迁移向量列，不能直接混用不同维度；更换 Embedding 模型需要重建现有向量。无向量服务时词法召回继续工作，但不会冒充语义召回。
+
+## 记忆与数据
+
+- 宠物状态来自规则与数据库，历史消息不能覆盖当前状态。
+- 记忆保存来源原文，模型提取还需经过结构与原文引用校验；引用校验无法数学保证语义真实性，用户可查看并纠正。
+- 普通纠正/遗忘使相关源消息退出后续上下文，清除相关摘要与失效向量，防止后台重提取。来自同一消息的其他事实可能一并退出，以避免间接复活。
+- 遗忘可选择同时删除原文。原文删除不可恢复；相关派生回答退出上下文。已发送给外部模型的历史请求无法撤回。
+- 任务在数据库中保存，独立 Worker 必须运行。Embedding 未配置时任务跳过向量生成；配置服务后可运行下方命令重建。
+
+```bash
+.venv/bin/python -m app.cli reindex
+```
+
+## 测试和评估
+
+```bash
+.venv/bin/ruff check backend evals
+npm --prefix frontend run lint
+npm --prefix frontend run build
+npm --prefix frontend test
+.venv/bin/pytest backend/tests/test_domain.py
+```
+
+数据库测试**会重建测试数据库中的业务表**。必须使用独立的、名称以 `_test` 结尾的数据库；不设置时数据库测试跳过。
+
+```bash
+# 先创建独立 miaoban_test 数据库，并安装 vector 扩展
+TEST_DATABASE_URL=postgresql+asyncpg://miaoban:miaoban@localhost:5432/miaoban_test \
+  .venv/bin/pytest backend/tests
+```
+
+浏览器测试需要 API、Worker 和 Web 已启动。测试创建独立账号，不删除现有用户；覆盖桌面和手机流程。默认使用安装的 Chrome，也可以调整 Playwright 配置为下载的 Chromium。
+
+```bash
+npm --prefix frontend run test:e2e
+```
+
+检索评估：
+
+```bash
+TEST_DATABASE_URL=postgresql+asyncpg://miaoban:miaoban@localhost:5432/miaoban_test \
+  .venv/bin/python evals/recall_benchmark.py
+```
+
+默认无外部 API 请求；需显式 `--allow-remote` 才评估真实 Embedding。样例集用于检查评估管道，不能作为毕业论文的准确率或陪伴效果结论。
+
+## 当前限制
+
+- 真实模型与向量服务需要用户密钥；验证记录区分模拟协议测试、控制向量测试与真实外部联调。
+- 第一版为单宠物、基础二维动作，复用原有插画；图片资源仍较大。
+- 小规模先使用精确向量检索，尚无大规模负载结论。
+- 摘要采用有来源的近期历史窗口；超长材料保留原文，后台跳过超预算摘要，不声称完整覆盖所有历史。
+- Compose 配置已提供，当前机器无 Docker，尚未实际构建运行容器。

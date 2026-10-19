@@ -1,0 +1,10 @@
+[
+  {"id":"name-exact","split":"dev","memories":[{"id":"name","kind":"fact","key":"preferred_name","content":"用户希望被称为小林"},{"id":"toy","kind":"preference","content":"用户喜欢逗猫棒玩具"}],"query":"你应该怎么称呼我","expected":["name"]},
+  {"id":"toy-keyword","split":"dev","memories":[{"id":"toy","kind":"preference","content":"用户喜欢用逗猫棒陪猫玩"},{"id":"food","kind":"preference","content":"用户喜欢草莓蛋糕"}],"query":"我喜欢用什么玩具陪你玩","expected":["toy"]},
+  {"id":"no-answer","split":"dev","memories":[{"id":"toy","kind":"preference","content":"用户喜欢用逗猫棒陪猫玩"}],"query":"我在哪个城市出生","expected":[]},
+  {"id":"name-paraphrase","split":"test","memories":[{"id":"name","kind":"fact","key":"preferred_name","content":"用户希望被称为阿林"},{"id":"availability","kind":"fact","content":"用户通常晚上有空"}],"query":"还记得我的名字吗","expected":["name"]},
+  {"id":"temporal-current","split":"test","memories":[{"id":"old","kind":"preference","key":"play_preference","content":"用户以前喜欢逗猫棒玩具"},{"id":"current","kind":"preference","key":"play_preference","content":"用户现在更喜欢小球玩具"}],"query":"现在我喜欢什么玩具","expected":["current"]},
+  {"id":"temporal-history","split":"test","memories":[{"id":"old","kind":"preference","key":"play_preference","content":"用户以前喜欢逗猫棒玩具"},{"id":"current","kind":"preference","key":"play_preference","content":"用户现在更喜欢小球玩具"}],"query":"以前我用什么逗猫棒玩具陪你玩","expected":["old"]},
+  {"id":"semantic-paraphrase","split":"test","memories":[{"id":"outdoors","kind":"preference","content":"用户周末喜欢到公园散步"},{"id":"food","kind":"preference","content":"用户喜欢巧克力蛋糕"}],"query":"休息日通常有哪些户外休闲安排","expected":["outdoors"]},
+  {"id":"unsupported-question","split":"test","memories":[{"id":"name","kind":"fact","key":"preferred_name","content":"用户希望被称为小林"}],"query":"我最喜欢的电影是什么","expected":[]}
+]
